@@ -1,5 +1,5 @@
 import { type MarkedToken, type Token, type Tokens } from 'marked';
-import { AdaptiveCard, CodeBlock, Container, Table, TableCell, TableRow, TextBlock, type CardElement, type IColumnDefinition, } from '@microsoft/teams.cards';
+import { AdaptiveCard, CodeBlock, Container, Image, OpenUrlAction, RichTextBlock, Table, TableCell, TableRow, TextBlock, TextRun, type CardElement, type IColumnDefinition, } from '@microsoft/teams.cards';
 
 class ACRenderer {
     ac = new AdaptiveCard();
@@ -7,23 +7,19 @@ class ACRenderer {
 
     constructor(private parser: MarkdownToACParser) { }
 
-    prepNewCardElement(element?: CardElement) {
-        let lastCardElement = element ?? this.ac.body.at(-1);
-        if (!lastCardElement) {
-            lastCardElement = new Container()
-            this.ac.body.push(lastCardElement)
-        } else if (element) {
-            this.ac.body.push(element)
-        }
+    prepNewCardElement(element: CardElement) {
+        this.ac.body.push(element)
         if (this.needsSeparator) {
-            lastCardElement.separator = true;
+            element.separator = true;
             this.needsSeparator = false;
         }
-        return lastCardElement;
     }
 
     addSpace() {
-        const lastCardElement = this.prepNewCardElement();
+        const lastCardElement = this.ac.body.at(-1);
+        if (!lastCardElement) {
+            return;
+        }
         switch (lastCardElement.spacing) {
             case 'None':
                 lastCardElement.spacing = 'ExtraSmall';
@@ -71,10 +67,14 @@ class ACRenderer {
                         size = 'Small';
                         break;
                 }
-                return new TextBlock(this.parser.parseInline(token.tokens), { style: 'heading', size });
+                const inlines = this.parser.parseInline(token.tokens);
+                return new RichTextBlock().withInlines(...inlines.map(i => {
+                    i.withSize(size).withWeight("Bolder")
+                    return i
+                }))
             }
             case 'paragraph': {
-                return new TextBlock(this.parser.parseInline(token.tokens));
+                return new RichTextBlock().withInlines(...this.parser.parseInline(token.tokens))
             }
             case 'list': {
                 return new TextBlock(token.raw);
@@ -89,14 +89,14 @@ class ACRenderer {
             case 'table': {
                 const table = new Table();
                 const headers = token.header.map(h => {
-                    const headerDetail = new TextBlock(this.parser.parseInline(h.tokens));
+                    const headerDetail = new RichTextBlock().withInlines(...this.parser.parseInline(h.tokens))
                     const cell = new TableCell(headerDetail);
                     return cell;
                 });
                 const headerRow = new TableRow({ cells: headers }).withStyle('emphasis');
                 const rows = token.rows.map(r => {
                     const cells = r.map(c => {
-                        const textDetail = new TextBlock(this.parser.parseInline(c.tokens));
+                        const textDetail = new RichTextBlock().withInlines(...this.parser.parseInline(c.tokens))
                         return new TableCell(textDetail);
                     });
                     return new TableRow({ cells });
@@ -117,6 +117,16 @@ class ACRenderer {
                     }
                 }
                 return new Container(...elements).withShowBorder(true);
+            }
+            case 'image': {
+                const imageElement = new Image(token.href, { altText: token.title ?? token.text })
+                return imageElement
+            }
+            case 'html': {
+                return new TextBlock(token.raw)
+            }
+            case 'def': {
+                return new RichTextBlock().withInlines(...this.parser.parseInline([{ type: 'link', text: token.title, href: token.href, raw: token.raw }]))
             }
             default:
                 return null;
@@ -149,6 +159,21 @@ class ACRenderer {
     }
 
     addBlockquote(token: Tokens.Blockquote) {
+        const element = this.tokenToCardElement(token);
+        if (element) this.prepNewCardElement(element);
+    }
+
+    addImage(token: Tokens.Image) {
+        const element = this.tokenToCardElement(token);
+        if (element) this.prepNewCardElement(element);
+    }
+
+    addHtml(token: Tokens.HTML | Tokens.Tag) {
+        const element = this.tokenToCardElement(token);
+        if (element) this.prepNewCardElement(element);
+    }
+
+    addDef(token: Tokens.Def) {
         const element = this.tokenToCardElement(token);
         if (element) this.prepNewCardElement(element);
     }
@@ -193,36 +218,58 @@ class MarkdownToACParser {
                 case 'list':
                     this.renderer.addList(token)
                     break;
+                case 'image':
+                    this.renderer.addImage(token)
+                    break;
+                case 'html':
+                    this.renderer.addHtml(token)
+                    break;
+                case 'def':
+                    this.renderer.addDef(token)
+                    break;
                 default:
-                    throw new Error(`Can't understand ${token.type}`)
+                    throw new Error(`Can't understand ${token.type} ${token.raw}`)
             }
         }
         this.renderer.finalize()
         return JSON.stringify(this.renderer.ac)
     }
 
-    parseInline(tokens: Token[]): string {
-        let res = ''
+    parseInline(tokens: Token[]): TextRun[] {
+        const array: TextRun[] = []
         for (let i = 0; i < tokens.length; i++) {
             const token = tokens[i] as MarkedToken;
             switch (token.type) {
                 case 'text':
-                    res += token.text
+                case 'escape':
+                    array.push(new TextRun(token.text))
+                    break;
+                case 'del':
+                    array.push(new TextRun(token.text).withStrikethrough(true))
                     break;
                 case 'strong':
-                    res += `**${token.text}**`
+                    array.push(new TextRun(token.text).withWeight('Bolder'))
                     break;
                 case 'em':
-                    res += `_${token.text}_`
+                    array.push(new TextRun(token.text).withItalic(true))
                     break;
                 case 'link':
-                    res += `[${token.text ?? token.href}](${token.href})`
+                    array.push(new TextRun(token.text).withColor("Accent").withSelectAction(new OpenUrlAction(token.href)))
+                    break;
+                case 'codespan':
+                    array.push(new TextRun(token.text).withFontType('Monospace'))
+                    break;
+                case 'html':
+                    array.push(new TextRun(token.text).withFontType('Monospace'))
+                    break;
+                case 'image':
+                    this.parseInline([{ type: 'link', text: token.title ?? token.text, href: token.href, raw: token.raw }])
                     break;
                 default:
-                    throw new Error(`Don't know how to handle inline ${token.type}`)
+                    throw new Error(`Don't know how to handle inline ${token.type} ${token.raw}`)
             }
         }
-        return res
+        return array
     }
 }
 

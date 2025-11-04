@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
 import { marked } from 'marked';
 import { MarkdownToACParser } from 'markdown2ac';
+import { AdaptiveCardPreview } from './AdaptiveCardPreview';
+import { defaultMarkdown } from './defaultMarkdown';
 import './App.css';
+
+type ViewMode = 'json' | 'preview';
 
 function JsonViewer({ json }: { json: string }) {
   const highlightJson = (jsonString: string) => {
@@ -33,34 +37,14 @@ function JsonViewer({ json }: { json: string }) {
   );
 }
 
-const defaultMarkdown = `# Hello!
-
-My name is Aamir Jawaid
-
-List:
-- one
-- two
-- three
-
-\`\`\`typescript
-const foo = 'bar';
-\`\`\`
-
-| foo | bar |
-| --- | --- |
-| baz | bim |
-
-> This is a quote
-
-This is **great**! _And just ok_
-`;
-
 function App() {
   const [markdown, setMarkdown] = useState(() => {
     const saved = localStorage.getItem('markdown2ac-content');
     return saved || defaultMarkdown;
   });
   const [adaptiveCard, setAdaptiveCard] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('preview');
+  const [previewKey, setPreviewKey] = useState(0);
 
   const convertMarkdown = (text: string) => {
     try {
@@ -99,8 +83,41 @@ function App() {
         />
       </div>
       <div className="column">
-        <h2>Adaptive Card Output</h2>
-        <JsonViewer json={adaptiveCard} />
+        <div className="output-header">
+          <h2>Adaptive Card Output</h2>
+          <div className="header-controls">
+            <div className="tabs">
+              <button
+                className={`tab ${viewMode === 'preview' ? 'active' : ''}`}
+                onClick={() => setViewMode('preview')}
+              >
+                Preview
+              </button>
+              <button
+                className={`tab ${viewMode === 'json' ? 'active' : ''}`}
+                onClick={() => setViewMode('json')}
+              >
+                JSON
+              </button>
+            </div>
+            {viewMode === 'preview' && (
+              <button
+                className="refresh-button"
+                onClick={() => setPreviewKey(prev => prev + 1)}
+                title="Refresh preview"
+              >
+                ↻
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="output-content">
+          {viewMode === 'json' ? (
+            <JsonViewer json={adaptiveCard} />
+          ) : (
+            <AdaptiveCardPreview key={previewKey} cardJson={adaptiveCard} />
+          )}
+        </div>
       </div>
     </div>
   );
